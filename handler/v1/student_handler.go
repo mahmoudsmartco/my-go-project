@@ -84,18 +84,21 @@ func CreateStudent(w http.ResponseWriter, r *http.Request) {
 	// ✅ بعد إضافة طالب جديد، نمسح الكاش القديم
 	cache.Rdb.Del(context.Background(), "students:all")
 
-	// بعد نجاح CreateStudent في DB وأرجاع id
-	evt := rabbitmq.StudentCreatedEvent{
-		ID:    id,
-		Name:  s.Name,
-		Email: s.Email,
-		When:  time.Now().Unix(),
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := publisher.PublishStudentCreated(ctx, evt, "students.created"); err != nil {
-		// لو فشل النشر لا نريد فشل الـ HTTP request، لكن نكتب لوج
-		log.Println("failed to publish event:  ", err)
+	// نشر حدث إلى RabbitMQ (لو DefaultPublisher مُهيأ)
+	if rabbitmq.DefaultPublisher != nil {
+		evt := rabbitmq.StudentCreatedEvent{
+			ID:    s.ID,
+			Name:  s.Name,
+			Email: s.Age,
+			When:  time.Now().Unix(),
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		err := rabbitmq.DefaultPublisher.PublishStudentCreated(ctx, evt, "students.created")
+		if err != nil {
+			// لا نفرّط في فشل النشر، فقط نسجل اللوق
+			log.Printf("warning: publish student.created failed: %v", err)
+		}
 	}
 
 	json.NewEncoder(w).Encode(s)

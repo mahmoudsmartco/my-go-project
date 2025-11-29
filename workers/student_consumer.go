@@ -15,59 +15,58 @@ type StudentCreatedEvent struct {
 	When  int64  `json:"when"`
 }
 
+// StartStudentConsumer يبدأ consumer ويستمر بالاستماع (blocking)
 func StartStudentConsumer(amqpURL, exchange, queueName, routingKey string) error {
 	conn, err := amqp.Dial(amqpURL)
 	if err != nil {
-		return err
+		return fmt.Errorf("cannot dial rabbitmq: %w", err)
 	}
 
 	ch, err := conn.Channel()
 	if err != nil {
 		conn.Close()
-		return err
+		return fmt.Errorf("cannot open channel: %w", err)
 	}
 
-	// Declare exchange & queue & bind
+	// declare exchange
 	if err := ch.ExchangeDeclare(exchange, "direct", true, false, false, false, nil); err != nil {
-		return err
+		return fmt.Errorf("exchange declare: %w", err)
 	}
 
-	// Dead-letter queue setup could be added via args
+	// declare queue (durable)
 	_, err = ch.QueueDeclare(queueName, true, false, false, false, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("queue declare: %w", err)
 	}
+
+	// bind
 	if err := ch.QueueBind(queueName, routingKey, exchange, false, nil); err != nil {
-		return err
+		return fmt.Errorf("queue bind: %w", err)
 	}
 
 	msgs, err := ch.Consume(queueName, "", false, false, false, false, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("consume: %w", err)
 	}
 
-	go func() {
-		for d := range msgs {
-			var evt StudentCreatedEvent
-			if err := json.Unmarshal(d.Body, &evt); err != nil {
-				log.Println("invalid message:", err)
-				d.Nack(false, false) // drop or send to DLQ
-				continue
-			}
-
-			// معالجة الرسالة: مثال تسجيل لوج أو إرسال إيميل (هنا سنسجل)
-			log.Printf("Processing StudentCreatedEvent: %+v\n", evt)
-
-			// مثال: نكتب سجل في DB (repository مثال)
-			// err = repository.LogStudentCreated(evt.ID, evt.Name, evt.When)
-			// if err != nil { ... retry ... }
-
-			// successful
-			d.Ack(false)
+	log.Println("student consumer started, waiting for messages...")
+	for d := range msgs {
+		var evt StudentCreatedEvent
+		if err := json.Unmarshal(d.Body, &evt); err != nil {
+			log.Println("invalid message body:", err)
+			// drop message or send to DLQ (here nack without requeue)
+			_ = d.Nack(false, false)
+			continue
 		}
-	}()
 
-	fmt.Println("Student consumer started, waiting messages...")
-	// لا نغلق conn/ch لأننا نريد worker يعمل طوال الوقت
+		// ----- هنا ضع منطق المعالجة الحقيقي -----
+		log.Printf("Processing StudentCreatedEvent: ID=%d Name=%s Email=%s\n", evt.ID, evt.Name, evt.Email)
+		// مثال: استدعاء repository لتسجيل لوق أو ارسال إيميل
+		// err := repository.LogStudentCreated(evt)
+		// if err != nil { ... retry ... }
+
+		// acknowledge
+		_ = d.Ack(false)
+	}
 	return nil
 }

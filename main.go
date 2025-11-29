@@ -6,12 +6,26 @@ import (
 	"app2_http_api_database/middleware"
 	"app2_http_api_database/routes"
 	"app2_http_api_database/service/rabbitmq"
+	"app2_http_api_database/workers"
 	"fmt"
 	"log"
 	"net/http"
 )
 
 func main() {
+
+	// existing init...
+	// Init RabbitMQ publisher
+	rabbitmq.InitDefaultPublisher("amqp://guest:guest@localhost:5672/", "students.exchange")
+	defer rabbitmq.CloseDefaultPublisher()
+
+	// Option A: تشغيل consumer داخل نفس العملية (غير مستحسن للإنتاج)
+	go func() {
+		if err := workers.StartStudentConsumer("amqp://guest:guest@localhost:5672/", "students.exchange", "students.created.queue", "students.created"); err != nil {
+			log.Printf("student consumer error: %v", err)
+		}
+	}()
+
 	// Initialize DB & Redis
 	config.InitDB()
 	cache.InitRedis()
@@ -22,9 +36,6 @@ func main() {
 
 	// Logger middleware
 	loggedMux := middleware.Logger(mux)
-
-	// initialize rabbitMQ
-	rabbitmq.InitDefaultPublisher()
 
 	// --------------------------
 	// 1️⃣ HTTP Server

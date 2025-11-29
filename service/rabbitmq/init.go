@@ -1,13 +1,26 @@
 package rabbitmq
 
-import "log"
+import (
+	"log"
+)
 
 var DefaultPublisher *Publisher
 
-func InitDefaultPublisher() {
-	p, err := NewPublisher("amqp://guest:guest@localhost:5672/", "students.exchange")
+// InitDefaultPublisher ينشئ DefaultPublisher وإمكانية الوصول له عالمياً
+func InitDefaultPublisher(amqpURL, exchange string) {
+	p, err := NewPublisher(amqpURL, exchange)
 	if err != nil {
-		log.Fatalf("rabbitmq publisher init failed: %v", err)
+		log.Printf("rabbitmq init failed: %v", err)
+		// لا نفشل التطبيق هنا، لكن DefaultPublisher سيبقى nil — تحقق قبل الاستخدام
+		return
 	}
 	DefaultPublisher = p
+	log.Printf("rabbitmq publisher initialized (exchange=%s)", exchange)
+}
+
+// CloseDefaultPublisher يغلق الاتصال عند غلق التطبيق
+func CloseDefaultPublisher() {
+	if DefaultPublisher != nil {
+		DefaultPublisher.Close()
+	}
 }
