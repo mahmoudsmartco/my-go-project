@@ -89,7 +89,7 @@ func CreateStudent(w http.ResponseWriter, r *http.Request) {
 		evt := rabbitmq.StudentCreatedEvent{
 			ID:    s.ID,
 			Name:  s.Name,
-			Email: s.Age,
+			Email: s.Email,
 			When:  time.Now().Unix(),
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

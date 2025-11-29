@@ -1,72 +1,82 @@
-package workers
+package rabbitmq
 
 import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
-	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/streadway/amqp"
 )
 
 type StudentCreatedEvent struct {
-	ID    int    `json:"id"`
+	ID    uint   `json:"id"`
 	Name  string `json:"name"`
-	Email string `json:"email,omitempty"`
-	When  int64  `json:"when"`
+	Email string `json:"email"`
 }
 
-// StartStudentConsumer يبدأ consumer ويستمر بالاستماع (blocking)
-func StartStudentConsumer(amqpURL, exchange, queueName, routingKey string) error {
-	conn, err := amqp.Dial(amqpURL)
-	if err != nil {
-		return fmt.Errorf("cannot dial rabbitmq: %w", err)
-	}
+func connectWithRetry() (*amqp.Connection, error) {
+	var attempt int
 
-	ch, err := conn.Channel()
-	if err != nil {
-		conn.Close()
-		return fmt.Errorf("cannot open channel: %w", err)
-	}
+	for {
+		conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
+		if err == nil {
+			fmt.Println("🟢 RabbitMQ Connected Successfully")
+			return conn, nil
+		}
 
-	// declare exchange
-	if err := ch.ExchangeDeclare(exchange, "direct", true, false, false, false, nil); err != nil {
-		return fmt.Errorf("exchange declare: %w", err)
-	}
+		attempt++
+		wait := time.Duration(1<<attempt) * time.Second // exponential backoff
 
-	// declare queue (durable)
-	_, err = ch.QueueDeclare(queueName, true, false, false, false, nil)
-	if err != nil {
-		return fmt.Errorf("queue declare: %w", err)
-	}
+		if wait > 30*time.Second {
+			wait = 30 * time.Second // max wait time
+		}
 
-	// bind
-	if err := ch.QueueBind(queueName, routingKey, exchange, false, nil); err != nil {
-		return fmt.Errorf("queue bind: %w", err)
+		log.Printf("🔴 RabbitMQ connection failed. Retrying in %v ...", wait)
+		time.Sleep(wait)
 	}
+}
 
-	msgs, err := ch.Consume(queueName, "", false, false, false, false, nil)
-	if err != nil {
-		return fmt.Errorf("consume: %w", err)
-	}
-
-	log.Println("student consumer started, waiting for messages...")
-	for d := range msgs {
-		var evt StudentCreatedEvent
-		if err := json.Unmarshal(d.Body, &evt); err != nil {
-			log.Println("invalid message body:", err)
-			// drop message or send to DLQ (here nack without requeue)
-			_ = d.Nack(false, false)
+func StartConsumer() {
+	for {
+		conn, _ := connectWithRetry()
+		ch, err := conn.Channel()
+		if err != nil {
+			log.Println("❌ Failed to open channel:", err)
 			continue
 		}
 
-		// ----- هنا ضع منطق المعالجة الحقيقي -----
-		log.Printf("Processing StudentCreatedEvent: ID=%d Name=%s Email=%s\n", evt.ID, evt.Name, evt.Email)
-		// مثال: استدعاء repository لتسجيل لوق أو ارسال إيميل
-		// err := repository.LogStudentCreated(evt)
-		// if err != nil { ... retry ... }
+		q, err := ch.QueueDeclare(
+			"student_created",
+			true,
+			false,
+			false,
+			false,
+			nil,
+		)
+		if err != nil {
+			log.Println("❌ Queue declare failed:", err)
+			ch.Close()
+			continue
+		}
 
-		// acknowledge
-		_ = d.Ack(false)
+		msgs, err := ch.Consume(q.Name, "", true, false, false, false, nil)
+		if err != nil {
+			log.Println("❌ Failed to consume messages:", err)
+			ch.Close()
+			continue
+		}
+
+		fmt.Println("📡 Consumer Waiting for messages...")
+
+		for msg := range msgs {
+			var event StudentCreatedEvent
+			json.Unmarshal(msg.Body, &event)
+
+			log.Printf("🟢 Processing StudentCreatedEvent: ID=%d Name=%s Email=%s",
+				event.ID, event.Name, event.Email)
+		}
+
+		log.Println("🔴 Connection lost. Reconnecting...")
 	}
-	return nil
 }
